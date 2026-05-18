@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -47,6 +48,7 @@ import com.msp1974.vacompanion.ui.VAViewModel
 import com.msp1974.vacompanion.ui.components.InfoItem
 import com.msp1974.vacompanion.ui.components.LabelledSwitch
 import com.msp1974.vacompanion.ui.components.UUIDEditDialog
+import com.msp1974.vacompanion.ui.components.dpadFreeFocusNavigation
 import com.msp1974.vacompanion.ui.theme.AppTheme
 import com.msp1974.vacompanion.ui.theme.CustomColours
 
@@ -54,6 +56,7 @@ import com.msp1974.vacompanion.ui.theme.CustomColours
 fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
     val vaUiState by vaViewModel.vacaState.collectAsState()
     val orientation = LocalConfiguration.current.orientation
+    val focusManager = LocalFocusManager.current
 
     when(orientation) {
         Configuration.ORIENTATION_SQUARE,
@@ -65,7 +68,8 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                     .verticalScroll(rememberScrollState())
                     .safeDrawingPadding()
                     .background(MaterialTheme.colorScheme.background)
-                    .fillMaxSize(),
+                    .fillMaxSize()
+                    .dpadFreeFocusNavigation(focusManager),
             ) {
                 Column(
                     modifier = Modifier
@@ -138,7 +142,9 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
         }
         Configuration.ORIENTATION_LANDSCAPE -> {
             Column(
-                modifier = Modifier.background(MaterialTheme.colorScheme.background)
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.background)
+                    .dpadFreeFocusNavigation(focusManager)
             ) {
                 Row() {
                     Column(
@@ -342,4 +348,3 @@ fun AppPreview() {
         }
     }
 }
-

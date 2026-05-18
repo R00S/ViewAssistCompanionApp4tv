@@ -21,6 +21,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -40,6 +41,7 @@ fun UUIDEditDialog(
     dismissText: String = "Cancel",
 ) {
     val uuid = rememberTextFieldState(initialText = initText)
+    val focusManager = LocalFocusManager.current
     Dialog(onDismissRequest = { onDismissRequest() },
         properties = DialogProperties(
             dismissOnBackPress = true,
@@ -52,7 +54,8 @@ fun UUIDEditDialog(
             modifier = Modifier
                 .padding(16.dp)
                 .width(400.dp)
-                .height(320.dp),
+                .height(320.dp)
+                .dpadFreeFocusNavigation(focusManager),
             shape = RoundedCornerShape(16.dp),
         ) {
             Column(
