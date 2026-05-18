@@ -59,7 +59,25 @@ jobs:
       - name: Decode Keystore
         env:
           KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
-        run: echo $KEYSTORE_FILE | base64 -di > ${{ github.workspace }}/app/release.keystore
+        run: echo "$KEYSTORE_FILE" | base64 -di > ${{ github.workspace }}/app/release.keystore
+
+      # Convert keystore to legacy PKCS12 format to ensure compatibility with the
+      # version of Bouncy Castle bundled in the Android Gradle Plugin.
+      # Keystores created with Java 9+ use SHA-256/AES-256 which produce ASN.1 tag
+      # numbers > 30 that older Bouncy Castle versions cannot parse.
+      - name: Migrate Keystore to legacy PKCS12
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          keytool -importkeystore \
+            -srckeystore ${{ github.workspace }}/app/release.keystore \
+            -destkeystore ${{ github.workspace }}/app/release.keystore.tmp \
+            -deststoretype pkcs12 \
+            -J-Dkeystore.pkcs12.legacy \
+            -srcstorepass "$KEYSTORE_PASSWORD" \
+            -deststorepass "$KEYSTORE_PASSWORD" \
+            -noprompt
+          mv ${{ github.workspace }}/app/release.keystore.tmp ${{ github.workspace }}/app/release.keystore
 
       # Run Build Project
       - name: Build gradle project
