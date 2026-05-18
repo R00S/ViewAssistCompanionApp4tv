@@ -29,7 +29,7 @@ fun VADialog(
             usePlatformDefaultWidth = true,
             decorFitsSystemWindows = true,
             dismissOnClickOutside = false,
-            dismissOnBackPress = false
+            dismissOnBackPress = true
         ),
         shape = RoundedCornerShape(20.dp),
         onDismissRequest = {

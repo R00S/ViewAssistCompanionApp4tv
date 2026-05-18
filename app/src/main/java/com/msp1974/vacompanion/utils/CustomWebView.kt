@@ -249,6 +249,9 @@ class CustomWebView @JvmOverloads constructor(
                     return true;
                 }
 
+                // Capture phase (true) ensures we see the event before shadow-DOM components do,
+                // but we deliberately omit stopPropagation so those components can still react
+                // to the same keydown (e.g. HA dropdowns, sliders, and other interactive widgets).
                 document.addEventListener('keydown', function (event) {
                     if (event.defaultPrevented) return;
                     var key = event.key;
@@ -263,7 +266,6 @@ class CustomWebView @JvmOverloads constructor(
 
                     if (handled) {
                         event.preventDefault();
-                        event.stopPropagation();
                     }
                 }, true);
             })();

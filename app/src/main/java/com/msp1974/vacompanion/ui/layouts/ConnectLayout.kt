@@ -25,10 +25,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -44,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.msp1974.vacompanion.R
+import timber.log.Timber
 import com.msp1974.vacompanion.ui.VAViewModel
 import com.msp1974.vacompanion.ui.components.InfoItem
 import com.msp1974.vacompanion.ui.components.LabelledSwitch
@@ -57,6 +62,11 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
     val vaUiState by vaViewModel.vacaState.collectAsState()
     val orientation = LocalConfiguration.current.orientation
     val focusManager = LocalFocusManager.current
+    val firstItemFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { firstItemFocus.requestFocus() }
+            .onFailure { Timber.w(it, "Initial focus request failed") }
+    }
 
     when(orientation) {
         Configuration.ORIENTATION_SQUARE,
@@ -88,7 +98,7 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    InfoTextBlock(vaUiState.appInfo,  vaViewModel::showUUIDChangeDialog)
+                    InfoTextBlock(vaUiState.appInfo,  vaViewModel::showUUIDChangeDialog, Modifier.focusRequester(firstItemFocus))
                     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
                         LaunchOnBootSwitch(vaUiState.launchOnBoot, callback = {
                             vaViewModel.launchOnBoot = it
@@ -196,7 +206,7 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                                 verticalArrangement = Arrangement.Center,
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                InfoTextBlock(vaUiState.appInfo, vaViewModel::showUUIDChangeDialog)
+                                InfoTextBlock(vaUiState.appInfo, vaViewModel::showUUIDChangeDialog, Modifier.focusRequester(firstItemFocus))
                                 if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
                                     LaunchOnBootSwitch(vaUiState.launchOnBoot, callback = {
                                         vaViewModel.launchOnBoot = it
@@ -254,9 +264,9 @@ fun LogoImage(orientation: Int, onLongPress: () -> Unit) {
 }
 
 @Composable
-fun InfoTextBlock(infoItems: Map<String, String>, onClick: () -> Unit) {
+fun InfoTextBlock(infoItems: Map<String, String>, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Column(
-        modifier=Modifier
+        modifier=modifier
             .width(280.dp)
             .padding(16.dp)
             .clickable {
