@@ -1,4 +1,10 @@
-# View Assist Companion Android App
+# View Assist Companion App — Android TV Fork
+
+> **This is a fork of [msp1974/ViewAssistCompanionApp](https://github.com/msp1974/ViewAssistCompanionApp).**  
+> Its **sole purpose** is to add Android TV / D-pad remote support to the upstream app so it can be used on TV boxes, Fire TV sticks, NVIDIA Shield, Chromecast with Google TV, and similar devices.  
+> For general documentation, feature requests, and bug reports unrelated to Android TV, please refer to the **[upstream repository](https://github.com/msp1974/ViewAssistCompanionApp)**.
+
+---
 
 The **View Assist Companion App** (VACA) is an Android application that turns any Android device — phone, tablet, or **Android TV** box — into a Home Assistant voice-satellite and WebView display terminal.  
 It pairs with the [View Assist](https://github.com/dinki/View-Assist) Home Assistant integration and communicates via the **Wyoming** protocol to provide local wake-word detection, microphone streaming, and a full-screen dashboard experience.
