@@ -8,6 +8,12 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 
+/**
+ * Intercepts D-pad arrow key presses and asks Compose to move focus in that direction.
+ *
+ * Returns the [Modifier] with key handling attached and only consumes the event when
+ * focus movement succeeds.
+ */
 fun Modifier.dpadFocusNavigation(focusManager: FocusManager): Modifier {
     return onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
