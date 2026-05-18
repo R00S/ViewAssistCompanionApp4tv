@@ -166,7 +166,7 @@ class CustomWebView @JvmOverloads constructor(
                 window.__vaDpadNavigationInstalled = true;
 
                 function getFocusableElements() {
-                    var selector = 'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"]),[role="button"],[contenteditable="true"]';
+                    var selector = 'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"]),[role="button"],[role="link"],[role="checkbox"],[role="tab"],[role="menuitem"],[role="switch"],[contenteditable="true"]';
                     return Array.prototype.slice.call(document.querySelectorAll(selector)).filter(function (el) {
                         if (!el || el.disabled) return false;
                         if (el.getAttribute('aria-hidden') === 'true') return false;
