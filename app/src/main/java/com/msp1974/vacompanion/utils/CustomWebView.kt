@@ -218,7 +218,8 @@ class CustomWebView @JvmOverloads constructor(
                 document.addEventListener('keydown', function (event) {
                     if (event.defaultPrevented) return;
                     var key = event.key;
-                    if (key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'ArrowLeft' && key !== 'ArrowRight') {
+                    var arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+                    if (arrowKeys.indexOf(key) === -1) {
                         return;
                     }
 
