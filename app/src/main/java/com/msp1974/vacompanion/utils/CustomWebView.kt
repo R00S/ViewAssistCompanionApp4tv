@@ -181,20 +181,54 @@ class CustomWebView @JvmOverloads constructor(
                         '[role="switch"]',
                         '[contenteditable="true"]'
                     ].join(',');
-                    return Array.prototype.slice.call(document.querySelectorAll(selector)).filter(function (el) {
+
+                    var elements = [];
+
+                    function addIfFocusable(el) {
                         if (!el || el.disabled) return false;
                         if (el.getAttribute('aria-hidden') === 'true') return false;
                         var style = window.getComputedStyle(el);
                         if (style.display === 'none' || style.visibility === 'hidden') return false;
-                        return el.offsetParent !== null || style.position === 'fixed';
+                        if (!(el.offsetParent !== null || style.position === 'fixed')) return false;
+                        elements.push(el);
+                        return true;
+                    }
+
+                    function collectFromRoot(root) {
+                        var matches = root.querySelectorAll(selector);
+                        for (var i = 0; i < matches.length; i++) {
+                            addIfFocusable(matches[i]);
+                        }
+
+                        var allNodes = root.querySelectorAll('*');
+                        for (var j = 0; j < allNodes.length; j++) {
+                            var node = allNodes[j];
+                            if (node && node.shadowRoot) {
+                                collectFromRoot(node.shadowRoot);
+                            }
+                        }
+                    }
+
+                    collectFromRoot(document);
+
+                    return elements.filter(function (el, index) {
+                        return elements.indexOf(el) === index;
                     });
+                }
+
+                function getDeepActiveElement() {
+                    var active = document.activeElement;
+                    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+                        active = active.shadowRoot.activeElement;
+                    }
+                    return active;
                 }
 
                 function moveFocus(forward) {
                     var elements = getFocusableElements();
                     if (elements.length === 0) return false;
 
-                    var active = document.activeElement;
+                    var active = getDeepActiveElement();
                     var index = elements.indexOf(active);
                     var target;
 
