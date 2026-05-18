@@ -144,7 +144,11 @@ class CustomWebViewClient(val viewModel: VAViewModel): WebViewClientCompat()  {
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
-        if (url != ERROR_URL && viewModel.vacaState.value.webViewPageLoadingStage == PageLoadingStage.AUTHORISED) {
+        val isValidPage = url != ERROR_URL
+        if (isValidPage) {
+            (view as? CustomWebView)?.enableDPadNavigationAssist()
+        }
+        if (isValidPage && viewModel.vacaState.value.webViewPageLoadingStage == PageLoadingStage.AUTHORISED) {
             Handler(Looper.getMainLooper()).postDelayed({
                 setPageLoadingState(PageLoadingStage.LOADED)
             }, 1000)

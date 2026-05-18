@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.tooling.preview.Preview
@@ -67,6 +68,7 @@ fun DiagnosticBar(
             )
             Column() {
                 AssistChip(
+                    modifier = Modifier.focusProperties { canFocus = false },
                     onClick = {},
                     label = { Text(if (diagnosticInfo.engine != "") diagnosticInfo.engine else "Disabled") },
                     colors = AssistChipDefaults.assistChipColors(
@@ -74,6 +76,7 @@ fun DiagnosticBar(
                     )
                 )
                 AssistChip(
+                    modifier = Modifier.focusProperties { canFocus = false },
                     onClick = {},
                     label = { Text("Detecting" ) },
                     colors = AssistChipDefaults.assistChipColors(
@@ -83,6 +86,7 @@ fun DiagnosticBar(
                     )
                 )
                 AssistChip(
+                    modifier = Modifier.focusProperties { canFocus = false },
                     onClick = {},
                     label = { Text("Streaming") },
                     colors = AssistChipDefaults.assistChipColors(

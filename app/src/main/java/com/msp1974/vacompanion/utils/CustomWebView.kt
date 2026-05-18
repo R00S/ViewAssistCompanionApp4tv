@@ -157,6 +157,123 @@ class CustomWebView @JvmOverloads constructor(
         loadUrl(url)
     }
 
+    fun enableDPadNavigationAssist() {
+        val script = """
+            (function () {
+                if (window.__vaDpadNavigationInstalled) {
+                    return;
+                }
+                window.__vaDpadNavigationInstalled = true;
+
+                function getFocusableElements() {
+                    var selector = [
+                        'a[href]',
+                        'button',
+                        'input',
+                        'select',
+                        'textarea',
+                        '[tabindex]:not([tabindex="-1"])',
+                        '[role="button"]',
+                        '[role="link"]',
+                        '[role="checkbox"]',
+                        '[role="tab"]',
+                        '[role="menuitem"]',
+                        '[role="switch"]',
+                        '[contenteditable="true"]'
+                    ].join(',');
+
+                    var elements = [];
+
+                    function addIfFocusable(el) {
+                        if (!el || el.disabled) return false;
+                        if (el.getAttribute('aria-hidden') === 'true') return false;
+                        var style = window.getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden') return false;
+                        if (!(el.offsetParent !== null || style.position === 'fixed')) return false;
+                        elements.push(el);
+                        return true;
+                    }
+
+                    function collectFromRoot(root) {
+                        var matches = root.querySelectorAll(selector);
+                        for (var i = 0; i < matches.length; i++) {
+                            addIfFocusable(matches[i]);
+                        }
+
+                        var allNodes = root.querySelectorAll('*');
+                        for (var j = 0; j < allNodes.length; j++) {
+                            var node = allNodes[j];
+                            if (node && node.shadowRoot) {
+                                collectFromRoot(node.shadowRoot);
+                            }
+                        }
+                    }
+
+                    collectFromRoot(document);
+
+                    return elements.filter(function (el, index) {
+                        return elements.indexOf(el) === index;
+                    });
+                }
+
+                function getDeepActiveElement() {
+                    var active = document.activeElement;
+                    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+                        active = active.shadowRoot.activeElement;
+                    }
+                    return active;
+                }
+
+                function moveFocus(forward) {
+                    var elements = getFocusableElements();
+                    if (elements.length === 0) return false;
+
+                    var active = getDeepActiveElement();
+                    var index = elements.indexOf(active);
+                    var target;
+
+                    if (index === -1) {
+                        target = forward ? elements[0] : elements[elements.length - 1];
+                    } else {
+                        var next = forward
+                            ? (index + 1) % elements.length
+                            : (index - 1 + elements.length) % elements.length;
+                        target = elements[next];
+                    }
+
+                    if (!target) return false;
+                    target.focus();
+                    if (typeof target.scrollIntoView === 'function') {
+                        target.scrollIntoView({block: 'nearest', inline: 'nearest'});
+                    }
+                    return true;
+                }
+
+                // Capture phase (true) ensures we see the event before shadow-DOM components do,
+                // but we deliberately omit stopPropagation so those components can still react
+                // to the same keydown (e.g. HA dropdowns, sliders, and other interactive widgets).
+                document.addEventListener('keydown', function (event) {
+                    if (event.defaultPrevented) return;
+                    var key = event.key;
+                    var arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+                    if (arrowKeys.indexOf(key) === -1) {
+                        return;
+                    }
+
+                    var handled = (key === 'ArrowUp' || key === 'ArrowLeft')
+                        ? moveFocus(false)
+                        : moveFocus(true);
+
+                    if (handled) {
+                        event.preventDefault();
+                    }
+                }, true);
+            })();
+        """.trimIndent()
+
+        evaluateJavascript(script, null)
+    }
+
     companion object {
         fun getView(context: Context): CustomWebView {
             return try {
