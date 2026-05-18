@@ -55,7 +55,7 @@ fun UUIDEditDialog(
                 .padding(16.dp)
                 .width(400.dp)
                 .height(320.dp)
-                .dpadFreeFocusNavigation(focusManager),
+                .dpadFocusNavigation(focusManager),
             shape = RoundedCornerShape(16.dp),
         ) {
             Column(

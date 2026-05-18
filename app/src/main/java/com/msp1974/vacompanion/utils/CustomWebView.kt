@@ -157,6 +157,72 @@ class CustomWebView @JvmOverloads constructor(
         loadUrl(url)
     }
 
+    fun enableDPadNavigationAssist() {
+        val script = """
+            (function () {
+                if (window.__vaDpadNavigationInstalled) {
+                    return;
+                }
+                window.__vaDpadNavigationInstalled = true;
+
+                function getFocusableElements() {
+                    var selector = 'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"]),[role="button"],[contenteditable="true"]';
+                    return Array.prototype.slice.call(document.querySelectorAll(selector)).filter(function (el) {
+                        if (!el || el.disabled) return false;
+                        if (el.getAttribute('aria-hidden') === 'true') return false;
+                        var style = window.getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden') return false;
+                        return el.offsetParent !== null || style.position === 'fixed';
+                    });
+                }
+
+                function moveFocus(forward) {
+                    var elements = getFocusableElements();
+                    if (elements.length === 0) return false;
+
+                    var active = document.activeElement;
+                    var index = elements.indexOf(active);
+                    var target;
+
+                    if (index === -1) {
+                        target = forward ? elements[0] : elements[elements.length - 1];
+                    } else {
+                        var next = forward
+                            ? (index + 1) % elements.length
+                            : (index - 1 + elements.length) % elements.length;
+                        target = elements[next];
+                    }
+
+                    if (!target) return false;
+                    target.focus();
+                    if (typeof target.scrollIntoView === 'function') {
+                        target.scrollIntoView({block: 'nearest', inline: 'nearest'});
+                    }
+                    return true;
+                }
+
+                document.addEventListener('keydown', function (event) {
+                    if (event.defaultPrevented) return;
+                    var key = event.key;
+                    if (key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'ArrowLeft' && key !== 'ArrowRight') {
+                        return;
+                    }
+
+                    var handled = (key === 'ArrowUp' || key === 'ArrowLeft')
+                        ? moveFocus(false)
+                        : moveFocus(true);
+
+                    if (handled) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }
+                }, true);
+            })();
+        """.trimIndent()
+
+        evaluateJavascript(script, null)
+    }
+
     companion object {
         fun getView(context: Context): CustomWebView {
             return try {

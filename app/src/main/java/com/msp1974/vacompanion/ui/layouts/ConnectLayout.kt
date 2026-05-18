@@ -48,7 +48,7 @@ import com.msp1974.vacompanion.ui.VAViewModel
 import com.msp1974.vacompanion.ui.components.InfoItem
 import com.msp1974.vacompanion.ui.components.LabelledSwitch
 import com.msp1974.vacompanion.ui.components.UUIDEditDialog
-import com.msp1974.vacompanion.ui.components.dpadFreeFocusNavigation
+import com.msp1974.vacompanion.ui.components.dpadFocusNavigation
 import com.msp1974.vacompanion.ui.theme.AppTheme
 import com.msp1974.vacompanion.ui.theme.CustomColours
 
@@ -69,7 +69,7 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                     .safeDrawingPadding()
                     .background(MaterialTheme.colorScheme.background)
                     .fillMaxSize()
-                    .dpadFreeFocusNavigation(focusManager),
+                    .dpadFocusNavigation(focusManager),
             ) {
                 Column(
                     modifier = Modifier
@@ -144,7 +144,7 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
             Column(
                 modifier = Modifier
                     .background(MaterialTheme.colorScheme.background)
-                    .dpadFreeFocusNavigation(focusManager)
+                    .dpadFocusNavigation(focusManager)
             ) {
                 Row() {
                     Column(

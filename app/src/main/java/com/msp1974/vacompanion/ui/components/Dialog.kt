@@ -24,7 +24,7 @@ fun VADialog(
 ) {
     val focusManager = LocalFocusManager.current
     AlertDialog(
-        modifier = Modifier.dpadFreeFocusNavigation(focusManager),
+        modifier = Modifier.dpadFocusNavigation(focusManager),
         properties = DialogProperties(
             usePlatformDefaultWidth = true,
             decorFitsSystemWindows = true,
