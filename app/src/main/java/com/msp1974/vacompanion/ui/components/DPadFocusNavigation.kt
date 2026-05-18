@@ -19,6 +19,6 @@ fun Modifier.dpadFreeFocusNavigation(focusManager: FocusManager): Modifier {
             else -> null
         } ?: return@onPreviewKeyEvent false
 
-        focusManager.moveFocus(direction)
+        return@onPreviewKeyEvent focusManager.moveFocus(direction)
     }
 }
