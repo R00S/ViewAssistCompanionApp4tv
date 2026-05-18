@@ -5,9 +5,10 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 
-fun Modifier.dpadFreeFocusNavigation(focusManager: FocusManager): Modifier {
+fun Modifier.dpadFocusNavigation(focusManager: FocusManager): Modifier {
     return onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
