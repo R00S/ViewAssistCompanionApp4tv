@@ -125,17 +125,16 @@ jobs:
         run: ./gradlew assembleRelease bundleRelease
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.calc_version.outputs.tag }}
           name: Release ${{ steps.calc_version.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             app/build/outputs/apk/release/vaca-*.apk
             app/build/outputs/bundle/release/*.aab
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to Google Play
         uses: r0adkll/upload-google-play@v1
