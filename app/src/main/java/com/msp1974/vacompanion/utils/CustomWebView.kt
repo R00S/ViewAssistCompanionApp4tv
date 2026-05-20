@@ -190,7 +190,10 @@ class CustomWebView @JvmOverloads constructor(
                     return true;
                 }
 
-                function getFocusableElements() {
+                // Returns an array of {el, rect, cx, cy} objects for every visible
+                // focusable element, with bounding rects read in a single pass so later
+                // callers never trigger additional synchronous layout recalculations.
+                function getFocusableItems() {
                     var raw = [];
 
                     function collectFromRoot(root) {
@@ -216,15 +219,21 @@ class CustomWebView @JvmOverloads constructor(
                         return false;
                     });
 
+                    // Read all bounding rects in one pass to avoid repeated layout queries.
+                    var items = deduped.map(function (el) {
+                        var r = el.getBoundingClientRect();
+                        return { el: el, rect: r, cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+                    });
+
                     // Exclude container elements whose bounding rect fully contains another
                     // focusable element. This prevents focus from getting trapped on a focusable
                     // panel host (e.g. ha-sidebar) that wraps its own navigable items (Bug 1).
-                    return deduped.filter(function (el) {
-                        var r = el.getBoundingClientRect();
+                    return items.filter(function (item) {
+                        var r = item.rect;
                         if (r.width === 0 && r.height === 0) return true;
-                        for (var k = 0; k < deduped.length; k++) {
-                            if (deduped[k] === el) continue;
-                            var c = deduped[k].getBoundingClientRect();
+                        for (var k = 0; k < items.length; k++) {
+                            if (items[k] === item) continue;
+                            var c = items[k].rect;
                             if (c.width > 0 && c.height > 0 &&
                                     c.left >= r.left && c.right <= r.right &&
                                     c.top >= r.top && c.bottom <= r.bottom) {
@@ -243,55 +252,52 @@ class CustomWebView @JvmOverloads constructor(
                     return active;
                 }
 
-                // Spatial (2-D) navigation: find the element whose bounding-rect centre
-                // lies closest in the pressed arrow direction.
+                // Spatial (2-D) navigation: find the item whose bounding-rect centre lies
+                // closest in the pressed arrow direction. Uses pre-computed cx/cy to avoid
+                // redundant layout queries.
                 // Primary-axis distance drives the score; secondary-axis distance
                 // (alignment) is a tie-breaker weighted x2.
-                function findBestInDirection(key, active, elements) {
-                    var activeRect = active ? active.getBoundingClientRect() : null;
-                    var ax = activeRect ? activeRect.left + activeRect.width  / 2 : -9999;
-                    var ay = activeRect ? activeRect.top  + activeRect.height / 2 : -9999;
+                function findBestInDirection(key, activeItem, items) {
+                    var ax = activeItem ? activeItem.cx : -9999;
+                    var ay = activeItem ? activeItem.cy : -9999;
 
                     var best = null;
                     var bestScore = Infinity;
 
-                    for (var i = 0; i < elements.length; i++) {
-                        var el = elements[i];
-                        if (el === active) continue;
-                        var rect = el.getBoundingClientRect();
-                        if (rect.width === 0 && rect.height === 0) continue;
-                        var cx = rect.left + rect.width  / 2;
-                        var cy = rect.top  + rect.height / 2;
+                    for (var i = 0; i < items.length; i++) {
+                        var item = items[i];
+                        if (activeItem && item.el === activeItem.el) continue;
+                        if (item.rect.width === 0 && item.rect.height === 0) continue;
 
                         var inDirection = false;
                         var primaryDist = 0, secondaryDist = 0;
 
                         if (key === 'ArrowRight') {
-                            inDirection = cx > ax + 5;
-                            primaryDist = cx - ax;
-                            secondaryDist = Math.abs(cy - ay);
+                            inDirection = item.cx > ax + 5;
+                            primaryDist = item.cx - ax;
+                            secondaryDist = Math.abs(item.cy - ay);
                         } else if (key === 'ArrowLeft') {
-                            inDirection = cx < ax - 5;
-                            primaryDist = ax - cx;
-                            secondaryDist = Math.abs(cy - ay);
+                            inDirection = item.cx < ax - 5;
+                            primaryDist = ax - item.cx;
+                            secondaryDist = Math.abs(item.cy - ay);
                         } else if (key === 'ArrowDown') {
-                            inDirection = cy > ay + 5;
-                            primaryDist = cy - ay;
-                            secondaryDist = Math.abs(cx - ax);
+                            inDirection = item.cy > ay + 5;
+                            primaryDist = item.cy - ay;
+                            secondaryDist = Math.abs(item.cx - ax);
                         } else if (key === 'ArrowUp') {
-                            inDirection = cy < ay - 5;
-                            primaryDist = ay - cy;
-                            secondaryDist = Math.abs(cx - ax);
+                            inDirection = item.cy < ay - 5;
+                            primaryDist = ay - item.cy;
+                            secondaryDist = Math.abs(item.cx - ax);
                         }
 
                         if (!inDirection) continue;
                         var score = primaryDist + secondaryDist * 2;
                         if (score < bestScore) {
                             bestScore = score;
-                            best = el;
+                            best = item;
                         }
                     }
-                    return best;
+                    return best ? best.el : null;
                 }
 
                 // Capture phase (true) ensures we see the event before shadow-DOM components do,
@@ -303,16 +309,21 @@ class CustomWebView @JvmOverloads constructor(
                     if (key !== 'ArrowUp' && key !== 'ArrowDown' &&
                             key !== 'ArrowLeft' && key !== 'ArrowRight') return;
 
-                    var elements = getFocusableElements();
-                    if (elements.length === 0) return;
+                    var items = getFocusableItems();
+                    if (items.length === 0) return;
 
                     var active = getDeepActiveElement();
-                    var target = findBestInDirection(key, active, elements);
+                    var activeItem = null;
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i].el === active) { activeItem = items[i]; break; }
+                    }
+
+                    var target = findBestInDirection(key, activeItem, items);
 
                     // Nothing found spatially – if focus is also absent from our list
                     // (e.g. page body focused at startup), jump to the first element.
-                    if (!target && (!active || elements.indexOf(active) === -1)) {
-                        target = elements[0];
+                    if (!target && !activeItem) {
+                        target = items[0].el;
                     }
 
                     if (target) {
