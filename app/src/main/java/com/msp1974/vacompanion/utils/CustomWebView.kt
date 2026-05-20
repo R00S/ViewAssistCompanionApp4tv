@@ -165,41 +165,39 @@ class CustomWebView @JvmOverloads constructor(
                 }
                 window.__vaDpadNavigationInstalled = true;
 
+                var FOCUSABLE_SELECTOR = [
+                    'a[href]',
+                    'button',
+                    'input',
+                    'select',
+                    'textarea',
+                    '[tabindex]:not([tabindex="-1"])',
+                    '[role="button"]',
+                    '[role="link"]',
+                    '[role="checkbox"]',
+                    '[role="tab"]',
+                    '[role="menuitem"]',
+                    '[role="switch"]',
+                    '[contenteditable="true"]'
+                ].join(',');
+
+                function isVisible(el) {
+                    if (!el || el.disabled) return false;
+                    if (el.getAttribute('aria-hidden') === 'true') return false;
+                    var style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden') return false;
+                    if (!(el.offsetParent !== null || style.position === 'fixed')) return false;
+                    return true;
+                }
+
                 function getFocusableElements() {
-                    var selector = [
-                        'a[href]',
-                        'button',
-                        'input',
-                        'select',
-                        'textarea',
-                        '[tabindex]:not([tabindex="-1"])',
-                        '[role="button"]',
-                        '[role="link"]',
-                        '[role="checkbox"]',
-                        '[role="tab"]',
-                        '[role="menuitem"]',
-                        '[role="switch"]',
-                        '[contenteditable="true"]'
-                    ].join(',');
-
-                    var elements = [];
-
-                    function addIfFocusable(el) {
-                        if (!el || el.disabled) return false;
-                        if (el.getAttribute('aria-hidden') === 'true') return false;
-                        var style = window.getComputedStyle(el);
-                        if (style.display === 'none' || style.visibility === 'hidden') return false;
-                        if (!(el.offsetParent !== null || style.position === 'fixed')) return false;
-                        elements.push(el);
-                        return true;
-                    }
+                    var raw = [];
 
                     function collectFromRoot(root) {
-                        var matches = root.querySelectorAll(selector);
+                        var matches = root.querySelectorAll(FOCUSABLE_SELECTOR);
                         for (var i = 0; i < matches.length; i++) {
-                            addIfFocusable(matches[i]);
+                            if (isVisible(matches[i])) raw.push(matches[i]);
                         }
-
                         var allNodes = root.querySelectorAll('*');
                         for (var j = 0; j < allNodes.length; j++) {
                             var node = allNodes[j];
@@ -211,8 +209,29 @@ class CustomWebView @JvmOverloads constructor(
 
                     collectFromRoot(document);
 
-                    return elements.filter(function (el, index) {
-                        return elements.indexOf(el) === index;
+                    // Deduplicate
+                    var seen = [];
+                    var deduped = raw.filter(function (el) {
+                        if (seen.indexOf(el) === -1) { seen.push(el); return true; }
+                        return false;
+                    });
+
+                    // Exclude container elements whose bounding rect fully contains another
+                    // focusable element. This prevents focus from getting trapped on a focusable
+                    // panel host (e.g. ha-sidebar) that wraps its own navigable items (Bug 1).
+                    return deduped.filter(function (el) {
+                        var r = el.getBoundingClientRect();
+                        if (r.width === 0 && r.height === 0) return true;
+                        for (var k = 0; k < deduped.length; k++) {
+                            if (deduped[k] === el) continue;
+                            var c = deduped[k].getBoundingClientRect();
+                            if (c.width > 0 && c.height > 0 &&
+                                    c.left >= r.left && c.right <= r.right &&
+                                    c.top >= r.top && c.bottom <= r.bottom) {
+                                return false;
+                            }
+                        }
+                        return true;
                     });
                 }
 
@@ -224,29 +243,55 @@ class CustomWebView @JvmOverloads constructor(
                     return active;
                 }
 
-                function moveFocus(forward) {
-                    var elements = getFocusableElements();
-                    if (elements.length === 0) return false;
+                // Spatial (2-D) navigation: find the element whose bounding-rect centre
+                // lies closest in the pressed arrow direction.
+                // Primary-axis distance drives the score; secondary-axis distance
+                // (alignment) is a tie-breaker weighted x2.
+                function findBestInDirection(key, active, elements) {
+                    var activeRect = active ? active.getBoundingClientRect() : null;
+                    var ax = activeRect ? activeRect.left + activeRect.width  / 2 : -9999;
+                    var ay = activeRect ? activeRect.top  + activeRect.height / 2 : -9999;
 
-                    var active = getDeepActiveElement();
-                    var index = elements.indexOf(active);
-                    var target;
+                    var best = null;
+                    var bestScore = Infinity;
 
-                    if (index === -1) {
-                        target = forward ? elements[0] : elements[elements.length - 1];
-                    } else {
-                        var next = forward
-                            ? (index + 1) % elements.length
-                            : (index - 1 + elements.length) % elements.length;
-                        target = elements[next];
+                    for (var i = 0; i < elements.length; i++) {
+                        var el = elements[i];
+                        if (el === active) continue;
+                        var rect = el.getBoundingClientRect();
+                        if (rect.width === 0 && rect.height === 0) continue;
+                        var cx = rect.left + rect.width  / 2;
+                        var cy = rect.top  + rect.height / 2;
+
+                        var inDirection = false;
+                        var primaryDist = 0, secondaryDist = 0;
+
+                        if (key === 'ArrowRight') {
+                            inDirection = cx > ax + 5;
+                            primaryDist = cx - ax;
+                            secondaryDist = Math.abs(cy - ay);
+                        } else if (key === 'ArrowLeft') {
+                            inDirection = cx < ax - 5;
+                            primaryDist = ax - cx;
+                            secondaryDist = Math.abs(cy - ay);
+                        } else if (key === 'ArrowDown') {
+                            inDirection = cy > ay + 5;
+                            primaryDist = cy - ay;
+                            secondaryDist = Math.abs(cx - ax);
+                        } else if (key === 'ArrowUp') {
+                            inDirection = cy < ay - 5;
+                            primaryDist = ay - cy;
+                            secondaryDist = Math.abs(cx - ax);
+                        }
+
+                        if (!inDirection) continue;
+                        var score = primaryDist + secondaryDist * 2;
+                        if (score < bestScore) {
+                            bestScore = score;
+                            best = el;
+                        }
                     }
-
-                    if (!target) return false;
-                    target.focus();
-                    if (typeof target.scrollIntoView === 'function') {
-                        target.scrollIntoView({block: 'nearest', inline: 'nearest'});
-                    }
-                    return true;
+                    return best;
                 }
 
                 // Capture phase (true) ensures we see the event before shadow-DOM components do,
@@ -255,18 +300,30 @@ class CustomWebView @JvmOverloads constructor(
                 document.addEventListener('keydown', function (event) {
                     if (event.defaultPrevented) return;
                     var key = event.key;
-                    var arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
-                    if (arrowKeys.indexOf(key) === -1) {
-                        return;
+                    if (key !== 'ArrowUp' && key !== 'ArrowDown' &&
+                            key !== 'ArrowLeft' && key !== 'ArrowRight') return;
+
+                    var elements = getFocusableElements();
+                    if (elements.length === 0) return;
+
+                    var active = getDeepActiveElement();
+                    var target = findBestInDirection(key, active, elements);
+
+                    // Nothing found spatially – if focus is also absent from our list
+                    // (e.g. page body focused at startup), jump to the first element.
+                    if (!target && (!active || elements.indexOf(active) === -1)) {
+                        target = elements[0];
                     }
 
-                    var handled = (key === 'ArrowUp' || key === 'ArrowLeft')
-                        ? moveFocus(false)
-                        : moveFocus(true);
-
-                    if (handled) {
+                    if (target) {
+                        target.focus();
+                        if (typeof target.scrollIntoView === 'function') {
+                            target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                        }
                         event.preventDefault();
                     }
+                    // At a spatial edge with a known focused element: don't consume the
+                    // event so HA components can handle any remaining default behaviour.
                 }, true);
             })();
         """.trimIndent()
