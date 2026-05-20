@@ -165,6 +165,20 @@ class CustomWebView @JvmOverloads constructor(
                 }
                 window.__vaDpadNavigationInstalled = true;
 
+                // Minimum pixel offset for an element to be considered "in" a direction.
+                // Prevents items at the same grid line from being treated as directional candidates.
+                var DIRECTION_THRESHOLD = 5;
+
+                // Weight applied to secondary-axis misalignment in the scoring formula
+                // (score = primaryDist + secondaryDist * SECONDARY_AXIS_WEIGHT).
+                // A value of 2 means a perfect secondary-axis alignment is preferred over
+                // a slightly closer but off-axis element.
+                var SECONDARY_AXIS_WEIGHT = 2;
+
+                // Sentinel used when no active element is present; guarantees every visible
+                // element passes the directional filter on the first key press.
+                var NO_ACTIVE_POSITION = -9999;
+
                 var FOCUSABLE_SELECTOR = [
                     'a[href]',
                     'button',
@@ -256,10 +270,10 @@ class CustomWebView @JvmOverloads constructor(
                 // closest in the pressed arrow direction. Uses pre-computed cx/cy to avoid
                 // redundant layout queries.
                 // Primary-axis distance drives the score; secondary-axis distance
-                // (alignment) is a tie-breaker weighted x2.
+                // (alignment) is a tie-breaker weighted by SECONDARY_AXIS_WEIGHT.
                 function findBestInDirection(key, activeItem, items) {
-                    var ax = activeItem ? activeItem.cx : -9999;
-                    var ay = activeItem ? activeItem.cy : -9999;
+                    var ax = activeItem ? activeItem.cx : NO_ACTIVE_POSITION;
+                    var ay = activeItem ? activeItem.cy : NO_ACTIVE_POSITION;
 
                     var best = null;
                     var bestScore = Infinity;
@@ -273,25 +287,25 @@ class CustomWebView @JvmOverloads constructor(
                         var primaryDist = 0, secondaryDist = 0;
 
                         if (key === 'ArrowRight') {
-                            inDirection = item.cx > ax + 5;
+                            inDirection = item.cx > ax + DIRECTION_THRESHOLD;
                             primaryDist = item.cx - ax;
                             secondaryDist = Math.abs(item.cy - ay);
                         } else if (key === 'ArrowLeft') {
-                            inDirection = item.cx < ax - 5;
+                            inDirection = item.cx < ax - DIRECTION_THRESHOLD;
                             primaryDist = ax - item.cx;
                             secondaryDist = Math.abs(item.cy - ay);
                         } else if (key === 'ArrowDown') {
-                            inDirection = item.cy > ay + 5;
+                            inDirection = item.cy > ay + DIRECTION_THRESHOLD;
                             primaryDist = item.cy - ay;
                             secondaryDist = Math.abs(item.cx - ax);
                         } else if (key === 'ArrowUp') {
-                            inDirection = item.cy < ay - 5;
+                            inDirection = item.cy < ay - DIRECTION_THRESHOLD;
                             primaryDist = ay - item.cy;
                             secondaryDist = Math.abs(item.cx - ax);
                         }
 
                         if (!inDirection) continue;
-                        var score = primaryDist + secondaryDist * 2;
+                        var score = primaryDist + secondaryDist * SECONDARY_AXIS_WEIGHT;
                         if (score < bestScore) {
                             bestScore = score;
                             best = item;
