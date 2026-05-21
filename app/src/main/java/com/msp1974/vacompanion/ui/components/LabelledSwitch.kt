@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.sp
 import com.msp1974.vacompanion.ui.theme.CustomColours
 
 @Composable
-fun LabelledSwitch(isOn: Boolean, callback: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+fun LabelledSwitch(isOn: Boolean, modifier: Modifier = Modifier, callback: (Boolean) -> Unit) {
     var checked by remember { mutableStateOf(isOn) }
     Row(
         modifier = modifier,

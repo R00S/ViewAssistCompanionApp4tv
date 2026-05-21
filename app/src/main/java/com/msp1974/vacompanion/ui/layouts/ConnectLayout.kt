@@ -351,14 +351,14 @@ fun StatusText(statusMessage: String) {
 }
 
 @Composable
-fun LaunchOnBootSwitch(isOn: Boolean, callback: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+fun LaunchOnBootSwitch(isOn: Boolean, modifier: Modifier = Modifier, callback: (Boolean) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        LabelledSwitch(isOn, callback, modifier = modifier)
+        LabelledSwitch(isOn, modifier = modifier, callback = callback)
     }
 }
 
