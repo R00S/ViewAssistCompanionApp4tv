@@ -171,6 +171,16 @@ class CustomWebView @JvmOverloads constructor(
                     '[contenteditable="true"]'
                 ].join(',');
 
+                // Vertical band height (px) used when sorting items within a group into
+                // reading order.  Items whose cy values fall in the same band are treated
+                // as the same row and sorted left-to-right; items in different bands are
+                // sorted top-to-bottom.
+                var ROW_BAND_PX = 30;
+
+                // Milliseconds to wait after a SPA navigation before re-focusing, giving
+                // Home Assistant time to render the new page content.
+                var SPA_RENDER_DELAY_MS = 1000;
+
                 // ── DOM helpers ──────────────────────────────────────────────────────
 
                 // Walk up through shadow boundaries: use .host when .parentNode is null
@@ -263,16 +273,17 @@ class CustomWebView @JvmOverloads constructor(
                     }
                     var rowH = window.innerHeight * 0.3;
                     return anchors.map(function (a, i) {
-                        // Sort items within a group by reading order (row by 30 px bands, then cx).
+                        // Sort items within a group by reading order (row by ROW_BAND_PX bands, then cx).
                         var gi = gItems[i].sort(function (x, y) {
-                            var d = Math.floor(x.cy / 30) - Math.floor(y.cy / 30);
+                            var d = Math.floor(x.cy / ROW_BAND_PX) - Math.floor(y.cy / ROW_BAND_PX);
                             return d !== 0 ? d : x.cx - y.cx;
                         });
                         var ar = (typeof a.getBoundingClientRect === 'function')
                             ? a.getBoundingClientRect() : gi[0].rect;
                         return { items: gi, cx: ar.left + ar.width / 2, cy: ar.top + ar.height / 2 };
                     }).sort(function (a, b) {
-                        // Sort groups: top row first (30 % viewport-height bands), then left-to-right.
+                        // Sort groups in reading order: top row first (bands of 30 % of viewport
+                        // height), then left-to-right within a row.
                         var ra = Math.floor(a.cy / rowH), rb = Math.floor(b.cy / rowH);
                         return ra !== rb ? ra - rb : a.cx - b.cx;
                     });
@@ -364,7 +375,7 @@ class CustomWebView @JvmOverloads constructor(
                 // wait for the new content to render then focus the first non-sidebar item.
                 function focusFirstContentItem() {
                     setTimeout(function () {
-                        var items = collectItems();
+                        var items  = collectItems();
                         var groups = buildGroups(items);
                         // Sidebar groups sit in the leftmost ~25 % of the viewport; skip them.
                         var contentX = window.innerWidth * 0.25;
@@ -372,7 +383,7 @@ class CustomWebView @JvmOverloads constructor(
                             if (groups[i].cx > contentX) { go(groups[i].items[0].el); return; }
                         }
                         if (groups.length) go(groups[0].items[0].el);
-                    }, 1000);
+                    }, SPA_RENDER_DELAY_MS);
                 }
 
                 window.addEventListener('popstate', focusFirstContentItem);
