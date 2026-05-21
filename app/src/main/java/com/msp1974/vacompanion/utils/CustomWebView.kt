@@ -160,6 +160,9 @@ class CustomWebView @JvmOverloads constructor(
     fun enableDPadNavigationAssist() {
         val script = """
             (function () {
+                // Set the guard flag immediately so that any re-entrant call (e.g. a
+                // second onPageFinished firing before the first script completes) returns
+                // before reaching the initialisation code below.
                 if (window.__vaDpadNavigationInstalled) return;
                 window.__vaDpadNavigationInstalled = true;
 
@@ -171,11 +174,14 @@ class CustomWebView @JvmOverloads constructor(
                     '[contenteditable="true"]'
                 ].join(',');
 
-                // Vertical band height (px) used when sorting items within a group into
-                // reading order.  Items whose cy values fall in the same band are treated
-                // as the same row and sorted left-to-right; items in different bands are
-                // sorted top-to-bottom.
-                var ROW_BAND_PX = 30;
+                // Minimum px the candidate centre must be past the active centre in the
+                // pressed direction before it qualifies as a directional neighbour.
+                var DIRECTION_THRESHOLD = 5;
+
+                // Weight applied to off-axis misalignment in the scoring formula:
+                //   score = primaryDist + secondaryDist * SECONDARY_WEIGHT
+                // Higher values favour well-aligned candidates over closer off-axis ones.
+                var SECONDARY_WEIGHT = 2;
 
                 // Milliseconds to wait after a SPA navigation before re-focusing, giving
                 // Home Assistant time to render the new page content.
@@ -183,10 +189,21 @@ class CustomWebView @JvmOverloads constructor(
 
                 // ── DOM helpers ──────────────────────────────────────────────────────
 
-                // Walk up through shadow boundaries: use .host when .parentNode is null
-                // (ShadowRoot.parentNode is null; ShadowRoot.host is the shadow-host element).
+                // Walk upward through shadow boundaries:
+                // ShadowRoot.parentNode is null, but ShadowRoot.host gives the host element.
                 function composedParent(n) { return n.parentNode || n.host || null; }
 
+                // Returns true if `ancestor` is a strict composed-DOM ancestor of `el`.
+                function composedContains(ancestor, el) {
+                    var cur = composedParent(el);
+                    while (cur) {
+                        if (cur === ancestor) return true;
+                        cur = composedParent(cur);
+                    }
+                    return false;
+                }
+
+                // Returns the deepest focused element, piercing shadow roots.
                 function deepActive() {
                     var el = document.activeElement;
                     while (el && el.shadowRoot && el.shadowRoot.activeElement) {
@@ -195,24 +212,43 @@ class CustomWebView @JvmOverloads constructor(
                     return el;
                 }
 
-                function isVisible(el) {
-                    if (!el || el.disabled) return false;
-                    if ((el.getAttribute && el.getAttribute('aria-hidden')) === 'true') return false;
+                // An element is visible when it is not hidden via CSS and has a non-zero
+                // bounding rect.  We intentionally do NOT use offsetParent because shadow-DOM
+                // elements often have a null offsetParent even when fully visible.
+                // Returns the rect on success (truthy) or null when hidden, so callers can
+                // reuse the already-computed rect and avoid a second layout query.
+                function visibleRect(el) {
+                    if (!el || el.disabled) return null;
+                    if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return null;
                     var s = window.getComputedStyle(el);
-                    return s.display !== 'none' && s.visibility !== 'hidden';
+                    if (s.display === 'none' || s.visibility === 'hidden') return null;
+                    var r = el.getBoundingClientRect();
+                    return (r.width > 0 && r.height > 0) ? r : null;
                 }
 
                 // ── Item collection ──────────────────────────────────────────────────
 
                 // Returns [{el, rect, cx, cy}] for all visible focusable elements,
-                // piercing every shadow root in the document tree.
+                // piercing every shadow root in the document tree, then removes any
+                // element that is a composed-DOM ancestor of another collected element.
+                // This prevents focusable container wrappers (e.g. ha-sidebar, ha-card)
+                // from obscuring the actual interactive targets inside them.
+                //
+                // Performance notes:
+                //  • visibleRect() is called once per element during collection; the
+                //    returned rect is cached in the item object so findBest() never
+                //    triggers an additional layout recalculation.
+                //  • The ancestor-exclusion filter builds a Set of ancestors in O(n·d)
+                //    (d = average DOM depth) before the filter pass, avoiding the O(n²)
+                //    cost of running composedContains inside the filter loop.
                 function collectItems() {
-                    var raw = [], seen = [];
+                    var seen = [], raw = [];
                     function collect(root) {
                         var m = root.querySelectorAll(FOCUSABLE_SELECTOR);
                         for (var i = 0; i < m.length; i++) {
-                            if (isVisible(m[i]) && seen.indexOf(m[i]) === -1) {
-                                seen.push(m[i]); raw.push(m[i]);
+                            if (seen.indexOf(m[i]) === -1) {
+                                var r = visibleRect(m[i]);
+                                if (r) { seen.push(m[i]); raw.push({ el: m[i], rect: r }); }
                             }
                         }
                         var all = root.querySelectorAll('*');
@@ -221,90 +257,68 @@ class CustomWebView @JvmOverloads constructor(
                         }
                     }
                     collect(document);
-                    return raw.map(function (el) {
-                        var r = el.getBoundingClientRect();
-                        return { el: el, rect: r, cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
-                    }).filter(function (it) { return it.rect.width > 0 && it.rect.height > 0; });
-                }
 
-                // ── Group detection ──────────────────────────────────────────────────
+                    var items = raw.map(function (item) {
+                        var r = item.rect;
+                        return { el: item.el, rect: r, cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+                    });
 
-                // Walk up the composed DOM from el and return the first ancestor that:
-                //   (a) has a non-zero bounding rect,
-                //   (b) is "card-sized" – width ≤ 60 % viewport width OR height ≤ 60 % viewport height
-                //       (catches narrow sidebars as well as short cards),
-                //   (c) strictly encloses at least 2 of the collected items (1 px tolerance).
-                // Falls back to el itself so every item always belongs to exactly one group.
-                function groupAnchor(el, items) {
-                    var mw = window.innerWidth  * 0.6;
-                    var mh = window.innerHeight * 0.6;
-                    var cur = composedParent(el);
-                    while (cur && cur !== document && cur !== document.documentElement) {
-                        if (typeof cur.getBoundingClientRect === 'function') {
-                            var r = cur.getBoundingClientRect();
-                            if (r.width > 0 && r.height > 0 && (r.width <= mw || r.height <= mh)) {
-                                var n = 0;
-                                for (var k = 0; k < items.length; k++) {
-                                    var ir = items[k].rect;
-                                    if (ir.left + 1 >= r.left && ir.right  - 1 <= r.right &&
-                                            ir.top  + 1 >= r.top  && ir.bottom - 1 <= r.bottom) {
-                                        n++;
-                                        if (n >= 2) return cur;
-                                    }
-                                }
-                            }
+                    // Build a set of elements that are ancestors of at least one other item.
+                    // An ancestor-element should not appear as a navigation target itself
+                    // (e.g. ha-sidebar should not be selected when its child links are present).
+                    var ancestorSet = [];
+                    for (var a = 0; a < items.length; a++) {
+                        var cur = composedParent(items[a].el);
+                        while (cur) {
+                            if (ancestorSet.indexOf(cur) === -1) ancestorSet.push(cur);
+                            cur = composedParent(cur);
                         }
-                        cur = composedParent(cur);
                     }
-                    return el; // leaf: element is its own single-item group
-                }
-
-                // Build an ordered list of groups from a flat items array.
-                // Each group: { items: [...sorted by reading order], cx, cy }
-                // Groups themselves are sorted in reading order (top row first, left-to-right within a row).
-                function buildGroups(items) {
-                    if (!items.length) return [];
-                    var anchors = [], gItems = [];
-                    for (var i = 0; i < items.length; i++) {
-                        var a = groupAnchor(items[i].el, items);
-                        var idx = anchors.indexOf(a);
-                        if (idx === -1) { anchors.push(a); gItems.push([items[i]]); }
-                        else gItems[idx].push(items[i]);
-                    }
-                    var rowH = window.innerHeight * 0.3;
-                    return anchors.map(function (a, i) {
-                        // Sort items within a group by reading order (row by ROW_BAND_PX bands, then cx).
-                        var gi = gItems[i].sort(function (x, y) {
-                            var d = Math.floor(x.cy / ROW_BAND_PX) - Math.floor(y.cy / ROW_BAND_PX);
-                            return d !== 0 ? d : x.cx - y.cx;
-                        });
-                        var ar = (typeof a.getBoundingClientRect === 'function')
-                            ? a.getBoundingClientRect() : gi[0].rect;
-                        return { items: gi, cx: ar.left + ar.width / 2, cy: ar.top + ar.height / 2 };
-                    }).sort(function (a, b) {
-                        // Sort groups in reading order: top row first (bands of 30 % of viewport
-                        // height), then left-to-right within a row.
-                        var ra = Math.floor(a.cy / rowH), rb = Math.floor(b.cy / rowH);
-                        return ra !== rb ? ra - rb : a.cx - b.cx;
+                    return items.filter(function (item) {
+                        return ancestorSet.indexOf(item.el) === -1;
                     });
                 }
 
-                // ── Focus helpers ────────────────────────────────────────────────────
+                // ── Spatial navigation ───────────────────────────────────────────────
 
-                function groupOf(groups) {
-                    var active = deepActive();
-                    if (!active) return -1;
-                    for (var g = 0; g < groups.length; g++)
-                        for (var i = 0; i < groups[g].items.length; i++)
-                            if (groups[g].items[i].el === active) return g;
-                    return -1;
-                }
+                // Find the best candidate in the given arrow direction using a 2D spatial
+                // scoring formula: score = primaryDist + secondaryDist * SECONDARY_WEIGHT.
+                // All four arrow keys work freely across the entire page, allowing movement
+                // from the sidebar to cards, from cards to the top tab bar, and so on.
+                function findBest(key, activeItem, items) {
+                    var ax = activeItem ? activeItem.cx : -9999;
+                    var ay = activeItem ? activeItem.cy : -9999;
+                    var best = null, bestScore = Infinity;
 
-                function itemOf(g) {
-                    var active = deepActive();
-                    for (var i = 0; i < g.items.length; i++)
-                        if (g.items[i].el === active) return i;
-                    return -1;
+                    for (var i = 0; i < items.length; i++) {
+                        var it = items[i];
+                        if (activeItem && it.el === activeItem.el) continue;
+
+                        var primary = 0, secondary = 0, inDir = false;
+
+                        if (key === 'ArrowRight') {
+                            inDir    = it.cx > ax + DIRECTION_THRESHOLD;
+                            primary  = it.cx - ax;
+                            secondary = Math.abs(it.cy - ay);
+                        } else if (key === 'ArrowLeft') {
+                            inDir    = it.cx < ax - DIRECTION_THRESHOLD;
+                            primary  = ax - it.cx;
+                            secondary = Math.abs(it.cy - ay);
+                        } else if (key === 'ArrowDown') {
+                            inDir    = it.cy > ay + DIRECTION_THRESHOLD;
+                            primary  = it.cy - ay;
+                            secondary = Math.abs(it.cx - ax);
+                        } else if (key === 'ArrowUp') {
+                            inDir    = it.cy < ay - DIRECTION_THRESHOLD;
+                            primary  = ay - it.cy;
+                            secondary = Math.abs(it.cx - ax);
+                        }
+
+                        if (!inDir) continue;
+                        var score = primary + secondary * SECONDARY_WEIGHT;
+                        if (score < bestScore) { bestScore = score; best = it; }
+                    }
+                    return best;
                 }
 
                 function go(el) {
@@ -318,10 +332,11 @@ class CustomWebView @JvmOverloads constructor(
 
                 // ── D-pad key handler ────────────────────────────────────────────────
 
-                // Capture phase so our handler runs before shadow-DOM component handlers.
-                // We call stopPropagation whenever we move focus so that HA components cannot
-                // steal it back.  At Up/Down group boundaries we deliberately do NOT consume
-                // the event so the browser can scroll the page naturally.
+                // Capture phase (true) so our handler runs before any shadow-DOM component
+                // handlers.  stopPropagation is called whenever we move focus so that HA
+                // components cannot intercept and steal focus back.  When no neighbour
+                // exists in the pressed direction we leave the event unconsumed so the
+                // browser can still scroll the page naturally.
                 document.addEventListener('keydown', function (e) {
                     if (e.defaultPrevented) return;
                     var key = e.key;
@@ -330,59 +345,43 @@ class CustomWebView @JvmOverloads constructor(
 
                     var items = collectItems();
                     if (!items.length) return;
-                    var groups = buildGroups(items);
-                    if (!groups.length) return;
 
-                    var gIdx = groupOf(groups);
-                    if (gIdx === -1) {
-                        // No known focus: set initial focus to first item of first group.
-                        go(groups[0].items[0].el);
+                    var active = deepActive();
+                    var activeItem = null;
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i].el === active) { activeItem = items[i]; break; }
+                    }
+
+                    if (!activeItem) {
+                        // No recognised focus → place focus on the first content item.
+                        go(items[0].el);
                         e.stopPropagation(); e.preventDefault();
                         return;
                     }
 
-                    var g = groups[gIdx];
-
-                    if (key === 'ArrowRight') {
-                        // Jump to first item of next group (wraps around).
-                        go(groups[(gIdx + 1) % groups.length].items[0].el);
+                    var target = findBest(key, activeItem, items);
+                    if (target) {
+                        go(target.el);
                         e.stopPropagation(); e.preventDefault();
-
-                    } else if (key === 'ArrowLeft') {
-                        // Jump to last item of previous group (wraps around).
-                        var pg = groups[(gIdx - 1 + groups.length) % groups.length];
-                        go(pg.items[pg.items.length - 1].el);
-                        e.stopPropagation(); e.preventDefault();
-
-                    } else {
-                        // Up / Down: navigate within the current group.
-                        var iIdx = itemOf(g);
-                        if (iIdx === -1) {
-                            go(g.items[0].el); e.stopPropagation(); e.preventDefault(); return;
-                        }
-                        var ni = key === 'ArrowDown' ? iIdx + 1 : iIdx - 1;
-                        if (ni >= 0 && ni < g.items.length) {
-                            go(g.items[ni].el);
-                            e.stopPropagation(); e.preventDefault();
-                        }
-                        // At group boundary: leave event unconsumed so the page can scroll.
                     }
+                    // At a spatial edge: don't consume so native scroll still works.
                 }, true);
 
-                // ── Auto-focus after SPA navigation (requirement d) ──────────────────
+                // ── Auto-focus after SPA navigation ──────────────────────────────────
 
                 // When HA navigates to a new dashboard page (pushState / popstate),
-                // wait for the new content to render then focus the first non-sidebar item.
+                // wait SPA_RENDER_DELAY_MS for the new content to render, then place
+                // focus on the first item that is not in the sidebar (leftmost 25 % of
+                // the viewport).
                 function focusFirstContentItem() {
                     setTimeout(function () {
-                        var items  = collectItems();
-                        var groups = buildGroups(items);
-                        // Sidebar groups sit in the leftmost ~25 % of the viewport; skip them.
+                        var items = collectItems();
+                        if (!items.length) return;
                         var contentX = window.innerWidth * 0.25;
-                        for (var i = 0; i < groups.length; i++) {
-                            if (groups[i].cx > contentX) { go(groups[i].items[0].el); return; }
+                        for (var i = 0; i < items.length; i++) {
+                            if (items[i].cx > contentX) { go(items[i].el); return; }
                         }
-                        if (groups.length) go(groups[0].items[0].el);
+                        go(items[0].el);
                     }, SPA_RENDER_DELAY_MS);
                 }
 
