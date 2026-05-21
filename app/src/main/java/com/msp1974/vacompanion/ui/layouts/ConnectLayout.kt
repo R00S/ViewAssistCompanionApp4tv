@@ -29,9 +29,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -53,7 +56,9 @@ import com.msp1974.vacompanion.ui.VAViewModel
 import com.msp1974.vacompanion.ui.components.InfoItem
 import com.msp1974.vacompanion.ui.components.LabelledSwitch
 import com.msp1974.vacompanion.ui.components.UUIDEditDialog
-import com.msp1974.vacompanion.ui.components.dpadFocusNavigation
+import com.msp1974.vacompanion.ui.components.FocusGroup
+import com.msp1974.vacompanion.ui.components.dpadGroupNavigation
+import com.msp1974.vacompanion.ui.components.dpadNavigationGroup
 import com.msp1974.vacompanion.ui.theme.AppTheme
 import com.msp1974.vacompanion.ui.theme.CustomColours
 
@@ -62,9 +67,27 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
     val vaUiState by vaViewModel.vacaState.collectAsState()
     val orientation = LocalConfiguration.current.orientation
     val focusManager = LocalFocusManager.current
-    val firstItemFocus = remember { FocusRequester() }
+
+    // Group 0 – InfoTextBlock (initial focus target)
+    val infoFR = remember { FocusRequester() }
+    // Group 1 – LabelledSwitch (only composed on API ≤ Q; requester is skipped otherwise)
+    val switchFR = remember { FocusRequester() }
+    // Group 2 – Action buttons (updateButton first, permissionsButton last)
+    val updateButtonFR = remember { FocusRequester() }
+    val permissionsButtonFR = remember { FocusRequester() }
+
+    var currentGroupIndex by remember { mutableIntStateOf(0) }
+
+    val focusGroups = remember {
+        listOf(
+            FocusGroup(infoFR),
+            FocusGroup(switchFR),
+            FocusGroup(first = updateButtonFR, last = permissionsButtonFR),
+        )
+    }
+
     LaunchedEffect(Unit) {
-        runCatching { firstItemFocus.requestFocus() }
+        runCatching { infoFR.requestFocus() }
             .onFailure { Timber.w(it, "Initial focus request failed") }
     }
 
@@ -79,7 +102,7 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                     .safeDrawingPadding()
                     .background(MaterialTheme.colorScheme.background)
                     .fillMaxSize()
-                    .dpadFocusNavigation(focusManager),
+                    .dpadGroupNavigation(focusGroups, { currentGroupIndex }, focusManager),
             ) {
                 Column(
                     modifier = Modifier
@@ -98,11 +121,23 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    InfoTextBlock(vaUiState.appInfo,  vaViewModel::showUUIDChangeDialog, Modifier.focusRequester(firstItemFocus))
+                    InfoTextBlock(
+                        vaUiState.appInfo,
+                        vaViewModel::showUUIDChangeDialog,
+                        Modifier
+                            .focusRequester(infoFR)
+                            .dpadNavigationGroup(0) { currentGroupIndex = it },
+                    )
                     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-                        LaunchOnBootSwitch(vaUiState.launchOnBoot, callback = {
-                            vaViewModel.launchOnBoot = it
-                        })
+                        LaunchOnBootSwitch(
+                            vaUiState.launchOnBoot,
+                            modifier = Modifier
+                                .focusRequester(switchFR)
+                                .dpadNavigationGroup(1) { currentGroupIndex = it },
+                            callback = {
+                                vaViewModel.launchOnBoot = it
+                            },
+                        )
                     } else {
                         Text(
                             text="To launch on boot, set this app as the launcher",
@@ -117,21 +152,22 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(80.dp)
-                            .zIndex(2f),
+                            .zIndex(2f)
+                            .dpadNavigationGroup(2) { currentGroupIndex = it },
                         verticalArrangement = Arrangement.Top,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         when {
                             vaUiState.updates.updateAvailable -> UpdateButton(
                                 text = stringResource(R.string.button_update_required),
-                                modifier = Modifier.padding(top=30.dp),
+                                modifier = Modifier.focusRequester(updateButtonFR).padding(top=30.dp),
                                 onClick = { vaViewModel.checkForUpdate() })
                         }
                         if (!vaUiState.permissions.hasCorePermissions || !vaUiState.permissions.hasOptionalPermissions) {
                             PermissionStatusButton(
                                 text = "Permissions",
                                 colour = if (!vaUiState.permissions.hasCorePermissions) CustomColours.RED else CustomColours.AMBER,
-                                modifier = Modifier.padding(top=30.dp),
+                                modifier = Modifier.focusRequester(permissionsButtonFR).padding(top=30.dp),
                                 onClick = { vaViewModel.requestPermissions() }
                             )
                         }
@@ -154,7 +190,7 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
             Column(
                 modifier = Modifier
                     .background(MaterialTheme.colorScheme.background)
-                    .dpadFocusNavigation(focusManager)
+                    .dpadGroupNavigation(focusGroups, { currentGroupIndex }, focusManager)
             ) {
                 Row() {
                     Column(
@@ -181,21 +217,22 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(80.dp)
-                                    .zIndex(2f),
+                                    .zIndex(2f)
+                                    .dpadNavigationGroup(2) { currentGroupIndex = it },
                                 verticalArrangement = Arrangement.Top,
                                 horizontalAlignment = Alignment.End
                             ) {
                                 when {
                                     vaUiState.updates.updateAvailable -> UpdateButton(
                                         text = stringResource(R.string.button_update_required),
-                                        modifier = Modifier.padding(16.dp),
+                                        modifier = Modifier.focusRequester(updateButtonFR).padding(16.dp),
                                         onClick = { vaViewModel.checkForUpdate() })
                                 }
                                 if (!vaUiState.permissions.hasCorePermissions || !vaUiState.permissions.hasOptionalPermissions) {
                                     PermissionStatusButton(
                                         text = "Permissions",
                                         colour = if (!vaUiState.permissions.hasCorePermissions) CustomColours.RED else CustomColours.AMBER,
-                                        modifier = Modifier.padding(16.dp),
+                                        modifier = Modifier.focusRequester(permissionsButtonFR).padding(16.dp),
                                         onClick = { vaViewModel.requestPermissions() }
                                     )
                                 }
@@ -206,11 +243,23 @@ fun ConnectionScreen(vaViewModel: VAViewModel = viewModel()) {
                                 verticalArrangement = Arrangement.Center,
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                InfoTextBlock(vaUiState.appInfo, vaViewModel::showUUIDChangeDialog, Modifier.focusRequester(firstItemFocus))
+                                InfoTextBlock(
+                                    vaUiState.appInfo,
+                                    vaViewModel::showUUIDChangeDialog,
+                                    Modifier
+                                        .focusRequester(infoFR)
+                                        .dpadNavigationGroup(0) { currentGroupIndex = it },
+                                )
                                 if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-                                    LaunchOnBootSwitch(vaUiState.launchOnBoot, callback = {
-                                        vaViewModel.launchOnBoot = it
-                                    })
+                                    LaunchOnBootSwitch(
+                                        vaUiState.launchOnBoot,
+                                        modifier = Modifier
+                                            .focusRequester(switchFR)
+                                            .dpadNavigationGroup(1) { currentGroupIndex = it },
+                                        callback = {
+                                            vaViewModel.launchOnBoot = it
+                                        },
+                                    )
                                 } else {
                                     Text(
                                         text="To launch on boot, set this app as the launcher",
@@ -252,6 +301,9 @@ fun LogoImage(orientation: Int, onLongPress: () -> Unit) {
                     Configuration.ORIENTATION_PORTRAIT -> Modifier.padding(start=48.dp, end=48.dp, top=8.dp)
                     else -> Modifier.padding(start=24.dp, end=24.dp, top=8.dp)
                 }
+                // Logo has no useful onClick action for D-pad users; exclude it from focus
+                // so navigation goes straight to InfoTextBlock on startup.
+                .focusProperties { canFocus = false }
                 .combinedClickable (
                     onLongClick = {
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -299,14 +351,14 @@ fun StatusText(statusMessage: String) {
 }
 
 @Composable
-fun LaunchOnBootSwitch(isOn: Boolean, callback: (Boolean) -> Unit) {
+fun LaunchOnBootSwitch(isOn: Boolean, callback: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        LabelledSwitch(isOn, callback)
+        LabelledSwitch(isOn, callback, modifier = modifier)
     }
 }
 

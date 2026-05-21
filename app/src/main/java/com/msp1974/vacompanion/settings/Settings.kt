@@ -8,7 +8,7 @@ import android.os.Build.UNKNOWN
 import android.provider.Settings.Secure
 import androidx.preference.PreferenceManager
 import androidx.core.content.edit
-import com.google.android.gms.common.util.ClientLibraryUtils.getPackageInfo
+import android.content.pm.PackageManager
 import com.msp1974.vacompanion.utils.Event
 import com.msp1974.vacompanion.utils.EventNotifier
 import com.msp1974.vacompanion.utils.FirebaseManager
@@ -52,7 +52,12 @@ class APPConfig @Inject constructor(val context: Context) {
 
     // Constant values
     val name = NAME
-    val version = getPackageInfo(context, context.packageName)?.versionName.toString()
+    val version = try {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
+    } catch (e: PackageManager.NameNotFoundException) {
+        "unknown"
+    }
     val serverPort = SERVER_PORT
 
     // Versions

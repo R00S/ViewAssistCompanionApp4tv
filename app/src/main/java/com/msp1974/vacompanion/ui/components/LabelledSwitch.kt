@@ -24,9 +24,10 @@ import androidx.compose.ui.unit.sp
 import com.msp1974.vacompanion.ui.theme.CustomColours
 
 @Composable
-fun LabelledSwitch(isOn: Boolean, callback: (Boolean) -> Unit) {
+fun LabelledSwitch(isOn: Boolean, callback: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     var checked by remember { mutableStateOf(isOn) }
     Row(
+        modifier = modifier,
     verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
