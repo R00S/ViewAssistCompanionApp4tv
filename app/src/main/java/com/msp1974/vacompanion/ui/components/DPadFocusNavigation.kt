@@ -86,6 +86,23 @@ fun Modifier.dpadNavigationGroup(
     if (focusState.hasFocus || focusState.isFocused) onGroupFocused(groupIndex)
 }
 
+/**
+ * Simple D-pad handler for a single focusable container (e.g. a dialog card).
+ * All four arrow keys move focus using Compose's built-in [FocusManager.moveFocus].
+ * Attach to any layout that contains focusable children such as buttons or text fields.
+ */
+fun Modifier.dpadFocusNavigation(focusManager: FocusManager): Modifier =
+    onPreviewKeyEvent { event ->
+        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        when (event.key) {
+            Key.DirectionUp    -> focusManager.moveFocus(FocusDirection.Up)
+            Key.DirectionDown  -> focusManager.moveFocus(FocusDirection.Down)
+            Key.DirectionLeft  -> focusManager.moveFocus(FocusDirection.Left)
+            Key.DirectionRight -> focusManager.moveFocus(FocusDirection.Right)
+            else               -> false
+        }
+    }
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
