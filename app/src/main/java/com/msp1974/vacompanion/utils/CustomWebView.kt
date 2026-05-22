@@ -348,13 +348,13 @@ class CustomWebView @JvmOverloads constructor(
                         return x.top - y.top;
                     });
 
-                    // Allocate nodes and wire prev/next pointers.
+                    // Allocate nodes and wire prev/next pointers (circular).
                     var nodes = grouped.map(function (g) {
                         return { items: g.items, prev: null, next: null };
                     });
                     for (var i = 0; i < nodes.length; i++) {
-                        if (i > 0)                nodes[i].prev = nodes[i - 1];
-                        if (i < nodes.length - 1) nodes[i].next = nodes[i + 1];
+                        nodes[i].prev = nodes[(i - 1 + nodes.length) % nodes.length];
+                        nodes[i].next = nodes[(i + 1) % nodes.length];
                     }
                     return nodes;
                 }
@@ -428,13 +428,12 @@ class CustomWebView @JvmOverloads constructor(
                             (curIdx - 1 + curNode.items.length) % curNode.items.length);
 
                     } else if (key === 'ArrowRight') {
-                        // First entry in the next GUI element (no wrap at end).
-                        if (curNode.next) moved = doFocus(curNode.next, 0);
+                        // First entry in the next GUI element (wraps to first group).
+                        moved = doFocus(curNode.next, 0);
 
                     } else if (key === 'ArrowLeft') {
-                        // Last entry in the previous GUI element (no wrap at start).
-                        if (curNode.prev)
-                            moved = doFocus(curNode.prev, curNode.prev.items.length - 1);
+                        // Last entry in the previous GUI element (wraps to last group).
+                        moved = doFocus(curNode.prev, curNode.prev.items.length - 1);
                     }
 
                     // Prevent default scroll only when we actually moved focus.
