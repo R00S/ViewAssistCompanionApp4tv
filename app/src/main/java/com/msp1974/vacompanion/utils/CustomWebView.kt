@@ -184,11 +184,22 @@ class CustomWebView @JvmOverloads constructor(
                 // ── Constants ─────────────────────────────────────────────────────────
 
                 var FOCUSABLE_SELECTOR = [
+                    // Standard HTML interactive elements
                     'a[href]', 'button', 'input', 'select', 'textarea',
                     '[tabindex]:not([tabindex="-1"])',
+                    // Standard ARIA interactive roles
                     '[role="button"]', '[role="link"]', '[role="checkbox"]',
                     '[role="tab"]', '[role="menuitem"]', '[role="switch"]',
-                    '[contenteditable="true"]'
+                    '[role="option"]', '[role="radio"]', '[role="combobox"]',
+                    '[role="treeitem"]', '[role="spinbutton"]', '[role="slider"]',
+                    '[role="menuitemcheckbox"]', '[role="menuitemradio"]',
+                    '[contenteditable="true"]',
+                    // HA / Polymer / Material custom elements that may not carry
+                    // a tabindex or ARIA role on the host element
+                    'mwc-list-item', 'ha-list-item',
+                    'paper-item', 'paper-icon-item',
+                    // Expandable disclosure elements
+                    'details > summary'
                 ].join(',');
 
                 // A group anchor is only valid when its bounding rect is smaller than
@@ -228,9 +239,12 @@ class CustomWebView @JvmOverloads constructor(
 
                 function isVisible(el) {
                     if (!el || el.disabled) return false;
-                    if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return false;
+                    if (el.getAttribute) {
+                        if (el.getAttribute('aria-hidden')   === 'true') return false;
+                        if (el.getAttribute('aria-disabled') === 'true') return false;
+                    }
                     var s = window.getComputedStyle(el);
-                    if (s.display === 'none' || s.visibility === 'hidden') return false;
+                    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
                     var r = el.getBoundingClientRect();
                     return r.width > 0 && r.height > 0;
                 }
@@ -257,6 +271,28 @@ class CustomWebView @JvmOverloads constructor(
                         var all = root.querySelectorAll('*');
                         for (var j = 0; j < all.length; j++) {
                             if (all[j].shadowRoot) collect(all[j].shadowRoot);
+                            // Fallback: catch interactive HA custom-element cards/rows
+                            // (e.g. ha-config-entry-row, ha-integration-domain) that
+                            // use CSS cursor:pointer but carry no tabindex or ARIA role.
+                            // Only check custom elements (tag names contain '-') to keep
+                            // the extra getComputedStyle calls to a manageable count.
+                            var tag = all[j].tagName;
+                            if (tag && tag.indexOf('-') !== -1 && seen.indexOf(all[j]) === -1) {
+                                var er = all[j].getBoundingClientRect();
+                                if (er.width >= 44 && er.height >= 24) {
+                                    var es = window.getComputedStyle(all[j]);
+                                    if (es.cursor === 'pointer' &&
+                                            es.display !== 'none' && es.visibility !== 'hidden' &&
+                                            es.opacity !== '0' &&
+                                            (!all[j].getAttribute ||
+                                             all[j].getAttribute('aria-hidden') !== 'true')) {
+                                        seen.push(all[j]);
+                                        raw.push({ el: all[j], rect: er,
+                                                   cx: er.left + er.width  / 2,
+                                                   cy: er.top  + er.height / 2 });
+                                    }
+                                }
+                            }
                         }
                     }
                     collect(document);
