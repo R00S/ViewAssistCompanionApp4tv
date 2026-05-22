@@ -203,6 +203,12 @@ class CustomWebView @JvmOverloads constructor(
                 // finish rendering before rebuilding the group list.
                 var RENDER_DELAY_MS = 500;
 
+                // SPA navigations trigger a full page re-render, which takes longer
+                // than a simple dialog open.  Add this extra delay on top of
+                // RENDER_DELAY_MS so that cards and panels are fully painted before
+                // we rebuild the group list.
+                var SPA_EXTRA_DELAY_MS = 500;
+
                 // ── DOM helpers ───────────────────────────────────────────────────────
 
                 // Walk up through shadow-root boundaries.
@@ -490,7 +496,7 @@ class CustomWebView @JvmOverloads constructor(
                         rebuildTimer = null;
                         rebuildAndSync();
                         if (curNode) doFocus(curNode, 0);
-                    }, RENDER_DELAY_MS + 500);
+                    }, RENDER_DELAY_MS + SPA_EXTRA_DELAY_MS);
                 }
 
                 window.addEventListener('popstate', onSpaNavigate);
