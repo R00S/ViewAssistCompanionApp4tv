@@ -158,13 +158,30 @@ class CustomWebView @JvmOverloads constructor(
     }
 
     fun enableDPadNavigationAssist() {
+        // D-pad navigation using a doubly-linked list of GUI element groups.
+        //
+        // The HA UI is divided into three natural zones that this scheme handles:
+        //   • Sidebar  – left panel, itself split into several sub-elements
+        //                (top menu, navigation list, bottom settings …)
+        //   • Views    – the tab/view switcher bar at the top of the main area
+        //   • Main area – individual cards, sections, dialogs
+        //
+        // Each zone contains multiple GUI elements (nodes in the linked list).
+        // Each node contains an ordered list of entries (focusable items).
+        //
+        // Navigation rules (as designed by the user):
+        //   Down  – next entry within the current GUI element (wraps)
+        //   Up    – previous entry within the current GUI element (wraps)
+        //   Right – first entry in the next GUI element
+        //   Left  – last entry in the previous GUI element
+        //   Click / Enter / Space – rebuild the list; if a new GUI element
+        //           appeared (e.g. a dialog opened), focus its first entry
         val script = """
             (function () {
-                // Set the guard flag immediately so that any re-entrant call (e.g. a
-                // second onPageFinished firing before the first script completes) returns
-                // before reaching the initialisation code below.
                 if (window.__vaDpadNavigationInstalled) return;
                 window.__vaDpadNavigationInstalled = true;
+
+                // ── Constants ─────────────────────────────────────────────────────────
 
                 var FOCUSABLE_SELECTOR = [
                     'a[href]', 'button', 'input', 'select', 'textarea',
@@ -174,36 +191,27 @@ class CustomWebView @JvmOverloads constructor(
                     '[contenteditable="true"]'
                 ].join(',');
 
-                // Minimum px the candidate centre must be past the active centre in the
-                // pressed direction before it qualifies as a directional neighbour.
-                var DIRECTION_THRESHOLD = 5;
+                // A group anchor is only valid when its bounding rect is smaller than
+                // this fraction of the viewport in at least one dimension.  This stops
+                // the top-level app-shell from swallowing all items into one group.
+                var MAX_GROUP_RATIO = 0.85;
 
-                // Weight applied to off-axis misalignment in the scoring formula:
-                //   score = primaryDist + secondaryDist * SECONDARY_WEIGHT
-                // Higher values favour well-aligned candidates over closer off-axis ones.
-                var SECONDARY_WEIGHT = 2;
+                // Pixel band used when sorting items / groups into reading-order rows.
+                var ROW_BAND_PX = 40;
 
-                // Milliseconds to wait after a SPA navigation before re-focusing, giving
-                // Home Assistant time to render the new page content.
-                var SPA_RENDER_DELAY_MS = 1000;
+                // After a click / Enter / SPA-navigation, wait this long for HA to
+                // finish rendering before rebuilding the group list.
+                var RENDER_DELAY_MS = 500;
 
-                // ── DOM helpers ──────────────────────────────────────────────────────
+                // ── DOM helpers ───────────────────────────────────────────────────────
 
-                // Walk upward through shadow boundaries:
-                // ShadowRoot.parentNode is null, but ShadowRoot.host gives the host element.
-                function composedParent(n) { return n.parentNode || n.host || null; }
-
-                // Returns true if `ancestor` is a strict composed-DOM ancestor of `el`.
-                function composedContains(ancestor, el) {
-                    var cur = composedParent(el);
-                    while (cur) {
-                        if (cur === ancestor) return true;
-                        cur = composedParent(cur);
-                    }
-                    return false;
+                // Walk up through shadow-root boundaries.
+                // ShadowRoot (nodeType 11) has no parentNode but has a .host element.
+                function composedParent(n) {
+                    return n.parentNode || (n.nodeType === 11 ? n.host : null);
                 }
 
-                // Returns the deepest focused element, piercing shadow roots.
+                // Deepest focused element, piercing nested shadow roots.
                 function deepActive() {
                     var el = document.activeElement;
                     while (el && el.shadowRoot && el.shadowRoot.activeElement) {
@@ -212,43 +220,32 @@ class CustomWebView @JvmOverloads constructor(
                     return el;
                 }
 
-                // An element is visible when it is not hidden via CSS and has a non-zero
-                // bounding rect.  We intentionally do NOT use offsetParent because shadow-DOM
-                // elements often have a null offsetParent even when fully visible.
-                // Returns the rect on success (truthy) or null when hidden, so callers can
-                // reuse the already-computed rect and avoid a second layout query.
-                function visibleRect(el) {
-                    if (!el || el.disabled) return null;
-                    if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return null;
+                function isVisible(el) {
+                    if (!el || el.disabled) return false;
+                    if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return false;
                     var s = window.getComputedStyle(el);
-                    if (s.display === 'none' || s.visibility === 'hidden') return null;
+                    if (s.display === 'none' || s.visibility === 'hidden') return false;
                     var r = el.getBoundingClientRect();
-                    return (r.width > 0 && r.height > 0) ? r : null;
+                    return r.width > 0 && r.height > 0;
                 }
 
-                // ── Item collection ──────────────────────────────────────────────────
+                // ── Item collection ───────────────────────────────────────────────────
 
-                // Returns [{el, rect, cx, cy}] for all visible focusable elements,
-                // piercing every shadow root in the document tree, then removes any
-                // element that is a composed-DOM ancestor of another collected element.
-                // This prevents focusable container wrappers (e.g. ha-sidebar, ha-card)
-                // from obscuring the actual interactive targets inside them.
-                //
-                // Performance notes:
-                //  • visibleRect() is called once per element during collection; the
-                //    returned rect is cached in the item object so findBest() never
-                //    triggers an additional layout recalculation.
-                //  • The ancestor-exclusion filter builds a Set of ancestors in O(n·d)
-                //    (d = average DOM depth) before the filter pass, avoiding the O(n²)
-                //    cost of running composedContains inside the filter loop.
-                function collectItems() {
+                // Returns [{el, rect, cx, cy}] for every visible focusable element,
+                // piercing every shadow root.  Focusable container wrappers (ha-sidebar,
+                // ha-card …) that are composed-DOM ancestors of other collected elements
+                // are then removed so they never crowd out the real targets inside them.
+                function collectAll() {
                     var seen = [], raw = [];
                     function collect(root) {
                         var m = root.querySelectorAll(FOCUSABLE_SELECTOR);
                         for (var i = 0; i < m.length; i++) {
-                            if (seen.indexOf(m[i]) === -1) {
-                                var r = visibleRect(m[i]);
-                                if (r) { seen.push(m[i]); raw.push({ el: m[i], rect: r }); }
+                            if (seen.indexOf(m[i]) === -1 && isVisible(m[i])) {
+                                seen.push(m[i]);
+                                var r = m[i].getBoundingClientRect();
+                                raw.push({ el: m[i], rect: r,
+                                           cx: r.left + r.width  / 2,
+                                           cy: r.top  + r.height / 2 });
                             }
                         }
                         var all = root.querySelectorAll('*');
@@ -258,139 +255,254 @@ class CustomWebView @JvmOverloads constructor(
                     }
                     collect(document);
 
-                    var items = raw.map(function (item) {
-                        var r = item.rect;
-                        return { el: item.el, rect: r, cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
-                    });
-
-                    // Build a set of elements that are ancestors of at least one other item.
-                    // An ancestor-element should not appear as a navigation target itself
-                    // (e.g. ha-sidebar should not be selected when its child links are present).
-                    var ancestorSet = [];
-                    for (var a = 0; a < items.length; a++) {
-                        var cur = composedParent(items[a].el);
+                    var elems = raw.map(function (it) { return it.el; });
+                    return raw.filter(function (it) {
+                        var cur = composedParent(it.el);
                         while (cur) {
-                            if (ancestorSet.indexOf(cur) === -1) ancestorSet.push(cur);
+                            if (elems.indexOf(cur) !== -1) return false;
                             cur = composedParent(cur);
                         }
-                    }
-                    return items.filter(function (item) {
-                        return ancestorSet.indexOf(item.el) === -1;
+                        return true;
                     });
                 }
 
-                // ── Spatial navigation ───────────────────────────────────────────────
+                // ── Group-anchor detection ────────────────────────────────────────────
 
-                // Find the best candidate in the given arrow direction using a 2D spatial
-                // scoring formula: score = primaryDist + secondaryDist * SECONDARY_WEIGHT.
-                // All four arrow keys work freely across the entire page, allowing movement
-                // from the sidebar to cards, from cards to the top tab bar, and so on.
-                function findBest(key, activeItem, items) {
-                    var ax = activeItem ? activeItem.cx : -9999;
-                    var ay = activeItem ? activeItem.cy : -9999;
-                    var best = null, bestScore = Infinity;
-
-                    for (var i = 0; i < items.length; i++) {
-                        var it = items[i];
-                        if (activeItem && it.el === activeItem.el) continue;
-
-                        var primary = 0, secondary = 0, inDir = false;
-
-                        if (key === 'ArrowRight') {
-                            inDir    = it.cx > ax + DIRECTION_THRESHOLD;
-                            primary  = it.cx - ax;
-                            secondary = Math.abs(it.cy - ay);
-                        } else if (key === 'ArrowLeft') {
-                            inDir    = it.cx < ax - DIRECTION_THRESHOLD;
-                            primary  = ax - it.cx;
-                            secondary = Math.abs(it.cy - ay);
-                        } else if (key === 'ArrowDown') {
-                            inDir    = it.cy > ay + DIRECTION_THRESHOLD;
-                            primary  = it.cy - ay;
-                            secondary = Math.abs(it.cx - ax);
-                        } else if (key === 'ArrowUp') {
-                            inDir    = it.cy < ay - DIRECTION_THRESHOLD;
-                            primary  = ay - it.cy;
-                            secondary = Math.abs(it.cx - ax);
+                // Walk up the composed DOM from el and return the smallest ancestor that:
+                //   (a) fits within MAX_GROUP_RATIO of the viewport in at least one axis,
+                //   (b) strictly encloses at least 2 of the collected items.
+                // Falls back to el itself so every item always belongs to a group.
+                //
+                // This naturally discovers the three HA UI zones and their sub-elements:
+                //   Sidebar  → sidebar-top section, nav-list, bottom section, …
+                //   Views    → the tab-bar container
+                //   Main area → individual cards, expanded sections, dialogs, …
+                function groupAnchor(el, items) {
+                    var vpW = window.innerWidth;
+                    var vpH = window.innerHeight;
+                    var cur = composedParent(el);
+                    while (cur && cur !== document && cur !== document.documentElement) {
+                        if (typeof cur.getBoundingClientRect === 'function') {
+                            var r = cur.getBoundingClientRect();
+                            if (r.width > 0 && r.height > 0) {
+                                // Stop climbing once the ancestor spans nearly the full
+                                // viewport in both directions – too coarse to be useful.
+                                if (r.width  > vpW * MAX_GROUP_RATIO &&
+                                        r.height > vpH * MAX_GROUP_RATIO) break;
+                                var n = 0;
+                                for (var k = 0; k < items.length; k++) {
+                                    var ir = items[k].rect;
+                                    if (ir.left + 1 >= r.left && ir.right  - 1 <= r.right &&
+                                            ir.top  + 1 >= r.top  && ir.bottom - 1 <= r.bottom) {
+                                        if (++n >= 2) return cur;
+                                    }
+                                }
+                            }
                         }
-
-                        if (!inDir) continue;
-                        var score = primary + secondary * SECONDARY_WEIGHT;
-                        if (score < bestScore) { bestScore = score; best = it; }
+                        cur = composedParent(cur);
                     }
-                    return best;
+                    return el;   // element is its own single-entry group
                 }
 
-                function go(el) {
-                    if (!el) return false;
+                // ── Doubly-linked list construction ───────────────────────────────────
+
+                // Returns an array of linked nodes sorted in reading order.
+                // Each node: { items: [{el,rect,cx,cy}…], prev: node|null, next: node|null }
+                function buildList(items) {
+                    if (!items.length) return [];
+
+                    // Assign every item to its group anchor.
+                    var anchors = [], buckets = [];
+                    for (var i = 0; i < items.length; i++) {
+                        var a = groupAnchor(items[i].el, items);
+                        var idx = anchors.indexOf(a);
+                        if (idx === -1) { anchors.push(a); buckets.push([items[i]]); }
+                        else            { buckets[idx].push(items[i]); }
+                    }
+
+                    // Sort entries within each group in reading order (top→bottom, left→right).
+                    for (var b = 0; b < buckets.length; b++) {
+                        buckets[b].sort(function (x, y) {
+                            if (Math.abs(x.cy - y.cy) < ROW_BAND_PX) return x.cx - y.cx;
+                            return x.cy - y.cy;
+                        });
+                    }
+
+                    // Sort groups in reading order using their top-left origin.
+                    var grouped = buckets.map(function (its) {
+                        var top = Infinity, left = Infinity;
+                        for (var i = 0; i < its.length; i++) {
+                            if (its[i].rect.top  < top)  top  = its[i].rect.top;
+                            if (its[i].rect.left < left) left = its[i].rect.left;
+                        }
+                        return { items: its, top: top, left: left };
+                    });
+                    grouped.sort(function (x, y) {
+                        if (Math.abs(x.top - y.top) < ROW_BAND_PX) return x.left - y.left;
+                        return x.top - y.top;
+                    });
+
+                    // Allocate nodes and wire prev/next pointers.
+                    var nodes = grouped.map(function (g) {
+                        return { items: g.items, prev: null, next: null };
+                    });
+                    for (var i = 0; i < nodes.length; i++) {
+                        if (i > 0)                nodes[i].prev = nodes[i - 1];
+                        if (i < nodes.length - 1) nodes[i].next = nodes[i + 1];
+                    }
+                    return nodes;
+                }
+
+                // ── Navigation state ──────────────────────────────────────────────────
+
+                var nodes   = [];    // flat array of all nodes (for searching)
+                var curNode = null;  // currently active node
+                var curIdx  = 0;     // active entry index within curNode
+
+                // Sync curNode/curIdx to whichever element is currently focused in the DOM.
+                function syncToActive() {
+                    var active = deepActive();
+                    if (!active) return;
+                    for (var n = 0; n < nodes.length; n++) {
+                        for (var i = 0; i < nodes[n].items.length; i++) {
+                            if (nodes[n].items[i].el === active) {
+                                curNode = nodes[n]; curIdx = i; return;
+                            }
+                        }
+                    }
+                }
+
+                function rebuildAndSync() {
+                    nodes = buildList(collectAll());
+                    curNode = nodes.length ? nodes[0] : null;
+                    curIdx  = 0;
+                    syncToActive();
+                }
+
+                function doFocus(node, idx) {
+                    if (!node || !node.items.length) return false;
+                    idx = Math.max(0, Math.min(idx, node.items.length - 1));
+                    var el = node.items[idx].el;
                     try {
                         el.focus();
                         if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                        curNode = node;
+                        curIdx  = idx;
                         return true;
-                    } catch (ignored) { return false; }
+                    } catch (err) { return false; }
                 }
 
-                // ── D-pad key handler ────────────────────────────────────────────────
+                // ── Arrow-key handler (capture phase) ─────────────────────────────────
 
-                // Capture phase (true) so our handler runs before any shadow-DOM component
-                // handlers.  stopPropagation is called whenever we move focus so that HA
-                // components cannot intercept and steal focus back.  When no neighbour
-                // exists in the pressed direction we leave the event unconsumed so the
-                // browser can still scroll the page naturally.
                 document.addEventListener('keydown', function (e) {
                     if (e.defaultPrevented) return;
                     var key = e.key;
                     if (key !== 'ArrowUp' && key !== 'ArrowDown' &&
                             key !== 'ArrowLeft' && key !== 'ArrowRight') return;
 
-                    var items = collectItems();
-                    if (!items.length) return;
+                    if (!nodes.length) rebuildAndSync();
+                    if (!nodes.length) return;
 
-                    var active = deepActive();
-                    var activeItem = null;
-                    for (var i = 0; i < items.length; i++) {
-                        if (items[i].el === active) { activeItem = items[i]; break; }
+                    // Re-sync whenever mouse/touch focus moved between key presses.
+                    if (!curNode || !curNode.items[curIdx] ||
+                            curNode.items[curIdx].el !== deepActive()) {
+                        syncToActive();
+                    }
+                    if (!curNode) { curNode = nodes[0]; curIdx = 0; }
+
+                    var moved = false;
+
+                    if (key === 'ArrowDown') {
+                        // Next entry within the current GUI element (wraps).
+                        moved = doFocus(curNode, (curIdx + 1) % curNode.items.length);
+
+                    } else if (key === 'ArrowUp') {
+                        // Previous entry within the current GUI element (wraps).
+                        moved = doFocus(curNode,
+                            (curIdx - 1 + curNode.items.length) % curNode.items.length);
+
+                    } else if (key === 'ArrowRight') {
+                        // First entry in the next GUI element (no wrap at end).
+                        if (curNode.next) moved = doFocus(curNode.next, 0);
+
+                    } else if (key === 'ArrowLeft') {
+                        // Last entry in the previous GUI element (no wrap at start).
+                        if (curNode.prev)
+                            moved = doFocus(curNode.prev, curNode.prev.items.length - 1);
                     }
 
-                    if (!activeItem) {
-                        // No recognised focus → place focus on the first content item.
-                        go(items[0].el);
-                        e.stopPropagation(); e.preventDefault();
-                        return;
-                    }
-
-                    var target = findBest(key, activeItem, items);
-                    if (target) {
-                        go(target.el);
-                        e.stopPropagation(); e.preventDefault();
-                    }
-                    // At a spatial edge: don't consume so native scroll still works.
+                    // Prevent default scroll only when we actually moved focus.
+                    // NOT calling stopPropagation so HA's own component handlers
+                    // (sliders, dropdowns, dialogs …) can still react to key events.
+                    if (moved) e.preventDefault();
                 }, true);
 
-                // ── Auto-focus after SPA navigation ──────────────────────────────────
+                // ── Post-action rebuild ───────────────────────────────────────────────
 
-                // When HA navigates to a new dashboard page (pushState / popstate),
-                // wait SPA_RENDER_DELAY_MS for the new content to render, then place
-                // focus on the first item that is not in the sidebar (leftmost 25 % of
-                // the viewport).
-                function focusFirstContentItem() {
-                    setTimeout(function () {
-                        var items = collectItems();
-                        if (!items.length) return;
-                        var contentX = window.innerWidth * 0.25;
-                        for (var i = 0; i < items.length; i++) {
-                            if (items[i].cx > contentX) { go(items[i].el); return; }
+                // After a click, Enter, or Space, HA may open a dialog, expand a
+                // section, or navigate within the SPA.  Snapshot the current element
+                // set NOW (before the action renders), then after RENDER_DELAY_MS:
+                //   • If a brand-new GUI element appeared → focus its first entry.
+                //   • Otherwise → stay wherever the DOM left focus.
+                var rebuildTimer = null;
+
+                function scheduleRebuild() {
+                    // Snapshot BEFORE the action takes effect.
+                    var prevEls = [];
+                    for (var n = 0; n < nodes.length; n++) {
+                        for (var i = 0; i < nodes[n].items.length; i++) {
+                            prevEls.push(nodes[n].items[i].el);
                         }
-                        go(items[0].el);
-                    }, SPA_RENDER_DELAY_MS);
+                    }
+                    if (rebuildTimer !== null) clearTimeout(rebuildTimer);
+                    rebuildTimer = setTimeout(function () {
+                        rebuildTimer = null;
+                        var newNodes = buildList(collectAll());
+                        nodes = newNodes;
+                        if (!newNodes.length) { curNode = null; curIdx = 0; return; }
+
+                        // Find the first node whose entries are all brand-new.
+                        for (var n = 0; n < newNodes.length; n++) {
+                            var allNew = true;
+                            for (var i = 0; i < newNodes[n].items.length; i++) {
+                                if (prevEls.indexOf(newNodes[n].items[i].el) !== -1) {
+                                    allNew = false; break;
+                                }
+                            }
+                            if (allNew) { doFocus(newNodes[n], 0); return; }
+                        }
+                        // No new GUI element: sync to wherever focus landed.
+                        syncToActive();
+                    }, RENDER_DELAY_MS);
                 }
 
-                window.addEventListener('popstate', focusFirstContentItem);
+                // Bubble phase: the click/key action fires first, we rebuild after.
+                document.addEventListener('click', scheduleRebuild, false);
+                document.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter' || e.key === ' ') scheduleRebuild();
+                }, false);
+
+                // ── SPA navigation ────────────────────────────────────────────────────
+
+                function onSpaNavigate() {
+                    if (rebuildTimer !== null) clearTimeout(rebuildTimer);
+                    rebuildTimer = setTimeout(function () {
+                        rebuildTimer = null;
+                        rebuildAndSync();
+                        if (curNode) doFocus(curNode, 0);
+                    }, RENDER_DELAY_MS + 500);
+                }
+
+                window.addEventListener('popstate', onSpaNavigate);
                 try {
                     var origPush = history.pushState.bind(history);
-                    history.pushState = function () { origPush.apply(history, arguments); focusFirstContentItem(); };
+                    history.pushState = function () {
+                        origPush.apply(history, arguments); onSpaNavigate();
+                    };
                 } catch (ignored) {}
 
+                // ── Initial build ─────────────────────────────────────────────────────
+                rebuildAndSync();
             })();
         """.trimIndent()
 
